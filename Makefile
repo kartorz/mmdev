@@ -1,7 +1,6 @@
 
 ifneq ($(KERNELRELEASE),)
-obj-m := winemm.o
-winemm.y = mmdev.o
+obj-m := mmdev.o
 
 else
 CFLAGS := "-O0"
