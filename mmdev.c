@@ -54,6 +54,7 @@ static int mmdev_mmap(struct file *filp, struct vm_area_struct *vma)
 	if (vm_size == 0)
 		goto exit;
 
+	wine_mmdev = kmem_cache_alloc(wine_mmdev.cache, GFP_KERNEL);
 	pfn = virt_to_phys(mmdev->cache) >> PAGE_SHIFT;
 	if (remap_pfn_range(vma, vma->vm_start, pfn, vm_size, vma->vm_page_prot))
 	{
@@ -149,6 +150,9 @@ static int setup_dev(struct mmdev *dev)
 static int __init wine_mmdev_init(void)
 {
 	memset(&wine_mmdev, 0, sizeof(struct mmdev));
+	wine_mmdev.cache = kmem_cache_create("wine_mmdev cache", 70, 0, SLAB_HWCACHE_ALIGN, NULL);
+	if(wine_mmdev.cache == NULL)
+		return -1;
 	if (setup_dev(&wine_mmdev)) {
                 //dev_err(&wine_mmdev->dev, "no dev number available!\n");
 		return -1;
@@ -159,6 +163,8 @@ static int __init wine_mmdev_init(void)
 static void __exit wine_mmdev_exit(void)
 {
 	struct mmdev *mmdev = &wine_mmdev; 
+	if(wine_mmdev.cache)
+		kmem_cache_destroy(wine_mmdev.cache);
 	cdev_del(&wine_mmdev.cdev);
 }
 
