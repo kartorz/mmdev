@@ -28,20 +28,61 @@
 MODULE_AUTHOR("liqiong <liqiong@nfschina>");
 MODULE_LICENSE("GPL");
 
-//#include "mmcch.c"
+#include "mmcch.c"
+
+DEFINE_HASHTABLE(cache_table, 8);
+
+struct cache_desc {
+    struct kmem_cache* cache;
+    int size;
+    struct hlist_node hnode;
+};
 
 struct mmdev {
 	unsigned long vm_size;
-	struct kmem_cache *cache;
 	struct cdev cdev;
 };
 static struct mmdev wine_mmdev;
 
 static unsigned int mmdev_inc = 0;
 
+void *alloc_cache(char *name, size_t size)
+{
+	struct h_node *curnode;
+	struct kmem_cache *cache;
+	struct cache_desc *desc;
+	unsigned int i;
+
+	rcu_read_lock();
+	hash_for_each_rcu(cache_table, i, desc, hnode)
+	{
+		if (desc->size == size)
+		{
+			cache = desc->cache;
+			goto alloc;
+		}
+	}
+	rcu_read_unlock();
+
+	desc = kmalloc(sizeof(struct cache_desc), GFP_KERNEL);
+	if (!desc)
+		goto err;
+	sprintf(name, "wine-object-%d", size);
+	desc->cache = kmem_cache_create(name, size, 0, SLAB_HWCACHE_ALIGN, NULL);
+	desc->size = size;
+	hash_add_rcu(cache_table, &desc->hnode, size);
+	// synchronize_rcu();
+	cache = desc->cache;
+alloc:
+	return kmem_cache_alloc(cache, GFP_KERNEL);
+err:
+	return NULL;
+}
+
 static int mmdev_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	struct mmdev * mmdev = filp->private_data;
+	struct cache_desc *desc;
 
 	unsigned long vm_start = vma->vm_start;
 	unsigned long vm_end = vma->vm_end;
@@ -54,8 +95,10 @@ static int mmdev_mmap(struct file *filp, struct vm_area_struct *vma)
 	if (vm_size == 0)
 		goto exit;
 
-	wine_mmdev = kmem_cache_alloc(wine_mmdev.cache, GFP_KERNEL);
-	pfn = virt_to_phys(mmdev->cache) >> PAGE_SHIFT;
+
+	char* name = "wine-object-70";
+	desc = alloc_cache(name, 70);
+	pfn = virt_to_phys(desc->cache) >> PAGE_SHIFT;
 	if (remap_pfn_range(vma, vma->vm_start, pfn, vm_size, vma->vm_page_prot))
 	{
 		printk(KERN_ERR "remap page range failed\n");
@@ -81,7 +124,7 @@ static ssize_t mmdev_read(struct file *filp, char __user *buffer, size_t size , 
 		n = size;
 	else
 		n = mmdev->vm_size - p;
-	ret = copy_to_user(buffer, mmdev->cache, n);
+	//ret = copy_to_user(buffer, mmdev->cache, n);
 	if (ret != 0)
 	{
 		return -EFAULT;
@@ -102,7 +145,7 @@ static ssize_t mmdev_write(struct file *filp, const char __user *buffer, size_t 
 		n = count;
 	else
 		n = mmdev->vm_size - p;
-	ret = copy_from_user(mmdev->cache, buffer, n);
+	//ret = copy_from_user(mmdev->cache, buffer, n);
 	if (ret != 0)
 	{
 		return -EFAULT;
@@ -150,21 +193,18 @@ static int setup_dev(struct mmdev *dev)
 static int __init wine_mmdev_init(void)
 {
 	memset(&wine_mmdev, 0, sizeof(struct mmdev));
-	wine_mmdev.cache = kmem_cache_create("wine_mmdev cache", 70, 0, SLAB_HWCACHE_ALIGN, NULL);
-	if(wine_mmdev.cache == NULL)
-		return -1;
 	if (setup_dev(&wine_mmdev)) {
                 //dev_err(&wine_mmdev->dev, "no dev number available!\n");
 		return -1;
 	}
+	hash_init(cache_table);
+	printk(KERN_ERR "module init\n");
 	return 0;
 }
 
 static void __exit wine_mmdev_exit(void)
 {
 	struct mmdev *mmdev = &wine_mmdev; 
-	if(wine_mmdev.cache)
-		kmem_cache_destroy(wine_mmdev.cache);
 	cdev_del(&wine_mmdev.cdev);
 }
 
